@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+package-lock.json
+
+# env
+.env
+
+# test artifacts (large binary files)
+Testing Result/
+tc_template/
+
+# local claude settings
+.claude/

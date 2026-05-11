@@ -9,5 +9,12 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "exceljs": "^4.4.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
   }
 }

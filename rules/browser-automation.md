@@ -18,11 +18,13 @@ agent-browser --version
 
 Always run commands in this exact order. Do not deviate.
 
-1. `open <url>` — starts the daemon and launches the browser. Nothing else works until this succeeds.
-2. `record start` — run only after `open` has returned successfully.
-3. All other commands (`click`, `type`, `wait`, etc.) — run after `record start`.
+1. Kill any stale session: `agent-browser close --all` (ignore errors if nothing is running)
+2. Create the result folder: `Testing Result/{TICKET_ID}-{Test_Case_Name}/`
+3. `open https://www.saucedemo.com/ --headed` — starts a fresh daemon and launches **one** browser window.
+4. `record start "Testing Result/{TICKET_ID}-{Test_Case_Name}/test-run.webm"` — records the existing session. **Do NOT pass a URL here** — passing a URL opens a second browser window.
+5. All other commands (`click`, `type`, `wait`, etc.) — run after `record start`.
 
-**Never run `record start` or any other command before `open`.** The daemon does not exist yet and the command will hang indefinitely.
+**Never pass a URL to `record start`.** Use `record start <path>` only — no URL argument. Passing a URL to `record start` creates a second browser context, resulting in two browser windows open at once.
 
 **Never take screenshots (`snapshot`) during test execution.** Video recording is the only evidence artifact — do not capture any `.png` or image files at any point.
 
@@ -30,13 +32,16 @@ Always run commands in this exact order. Do not deviate.
 
 ## Session Close (Mandatory)
 
-Close the session at the end of every test — pass or fail — no exceptions:
+At the end of every test — pass or fail — run these two commands in order:
 
 ```bash
+agent-browser record stop
 agent-browser --session {SESSION_NAME} close
 ```
 
-This stops the recording and clears all browser state (localStorage, cookies, session) so the next test starts clean. Always close before starting a new test case.
+`record stop` saves the `.webm` file to the path given in `record start`. **It must run before `close`** — closing the session first will discard the recording.
+
+This clears all browser state (localStorage, cookies, session) so the next test starts clean. Always close before starting a new test case.
 
 ---
 
@@ -52,8 +57,8 @@ Testing Result/
 
 **Rules:**
 - One folder and one recording per test case — never mix recordings from different test cases
-- Each test case has its own `open` → `record start` → `close` cycle
-- Always create the result folder before starting the test
+- Each test case has its own `close --all` → `open --headed` → `record start <path>` → test steps → `record stop` → `close` cycle
+- Always kill stale sessions before `open`
 
 ---
 
