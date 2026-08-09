@@ -1,17 +1,21 @@
 {
   "name": "saucedemo-webhook",
   "version": "1.0.0",
-  "description": "Jira webhook receiver that spawns claude for SauceDemo QA",
+  "description": "Jira-driven manual E2E QA agent workflow for SauceDemo",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:mcp": "node mcp-server.mjs"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
     "exceljs": "^4.4.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

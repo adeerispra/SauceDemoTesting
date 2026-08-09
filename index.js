@@ -1,11 +1,15 @@
 import http from "http";
 import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
 
+const HOST = process.env.HOST || "127.0.0.1";
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
-const JIRA_BASE_URL = (
-  process.env.JIRA_BASE_URL || "https://adesembiring61.atlassian.net"
-).replace(/\/$/, "");
+const JIRA_BASE_URL = (process.env.JIRA_BASE_URL || "").replace(/\/$/, "");
+const TARGET_JIRA_STATUS = process.env.TARGET_JIRA_STATUS || "Ready for Testing";
+const CLAUDE_SKIP_PERMISSIONS = process.env.CLAUDE_SKIP_PERMISSIONS === "true";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function timestamp() {
   return new Date().toISOString();
@@ -28,6 +32,43 @@ function buildJiraUrl(payload) {
 
   if (!key) return null;
   return `${JIRA_BASE_URL}/browse/${key}`;
+}
+
+function normalize(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getIssueKey(payload) {
+  return (
+    payload?.issue?.key ||
+    payload?.issueKey ||
+    payload?.data?.issue?.key ||
+    "UNKNOWN"
+  );
+}
+
+function getCurrentStatus(payload) {
+  return (
+    payload?.issue?.fields?.status?.name ||
+    payload?.issue?.status?.name ||
+    payload?.status?.name ||
+    payload?.toStatus ||
+    payload?.data?.issue?.fields?.status?.name ||
+    null
+  );
+}
+
+function hasTargetStatusTransition(payload) {
+  const target = normalize(TARGET_JIRA_STATUS);
+  const changelogItems = payload?.changelog?.items || payload?.data?.changelog?.items || [];
+
+  const transitionedToTarget = changelogItems.some((item) => {
+    return normalize(item?.field) === "status" && normalize(item?.toString) === target;
+  });
+
+  if (transitionedToTarget) return true;
+
+  return normalize(getCurrentStatus(payload)) === target;
 }
 
 function parseAgentLine(line) {
@@ -122,19 +163,29 @@ function runClaude(jiraUrl, issueKey) {
   const prompt = `A new Jira ticket has been assigned for QA testing: ${jiraUrl}. Follow the full test execution workflow defined in CLAUDE.md. Start immediately.`;
 
   const extraPaths = [
-    `${process.env.USERPROFILE}`,
-    `${process.env.APPDATA}\\npm`,
-    `${process.env.LOCALAPPDATA}\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1-full_build\\bin`,
-  ].join(";");
+    process.env.USERPROFILE,
+    process.env.APPDATA ? `${process.env.APPDATA}\\npm` : null,
+    process.env.LOCALAPPDATA
+      ? `${process.env.LOCALAPPDATA}\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1-full_build\\bin`
+      : null,
+  ].filter(Boolean);
+  const claudeArgs = ["--print", "--output-format", "stream-json", "--verbose"];
+
+  if (CLAUDE_SKIP_PERMISSIONS) {
+    claudeArgs.splice(1, 0, "--dangerously-skip-permissions");
+  }
 
   const proc = spawn(
     "claude",
-    ["--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"],
+    claudeArgs,
     {
       stdio: ["pipe", "pipe", "pipe"],
       shell: true,
-      cwd: new URL(".", import.meta.url).pathname.replace(/^\//, ""),
-      env: { ...process.env, PATH: `${extraPaths};${process.env.PATH}` },
+      cwd: __dirname,
+      env: {
+        ...process.env,
+        PATH: [...extraPaths, process.env.PATH].filter(Boolean).join(path.delimiter),
+      },
     }
   );
 
@@ -247,12 +298,23 @@ const server = http.createServer((req, res) => {
     const event = payload?.webhookEvent || "unknown";
     log("webhook", `Received Jira event: ${event}`);
 
+    if (!JIRA_BASE_URL) {
+      logErr("webhook", "Missing JIRA_BASE_URL — request rejected");
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end("Server configuration missing JIRA_BASE_URL");
+      return;
+    }
+
+    if (!hasTargetStatusTransition(payload)) {
+      const currentStatus = getCurrentStatus(payload) || "unknown";
+      log("webhook", `Issue status is '${currentStatus}' — waiting for '${TARGET_JIRA_STATUS}'`);
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end(`OK (ignored: target status is ${TARGET_JIRA_STATUS})`);
+      return;
+    }
+
     const jiraUrl = buildJiraUrl(payload);
-    const issueKey =
-      payload?.issue?.key ||
-      payload?.issueKey ||
-      payload?.data?.issue?.key ||
-      "UNKNOWN";
+    const issueKey = getIssueKey(payload);
 
     if (!jiraUrl) {
       log("webhook", "No issue key found in payload — skipping");
@@ -278,10 +340,17 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  log("server", `Jira webhook receiver listening on port ${PORT}`);
-  log("server", `Endpoint: POST http://localhost:${PORT}/webhook`);
-  log("server", `Jira base URL: ${JIRA_BASE_URL}`);
+server.on("error", (err) => {
+  logErr("server", `Failed to start webhook receiver: ${err.message}`);
+  process.exitCode = 1;
+});
+
+server.listen(PORT, HOST, () => {
+  log("server", `Jira webhook receiver listening on ${HOST}:${PORT}`);
+  log("server", `Endpoint: POST http://${HOST}:${PORT}/webhook`);
+  log("server", `Jira base URL: ${JIRA_BASE_URL || "(not configured)"}`);
+  log("server", `Target Jira status: ${TARGET_JIRA_STATUS}`);
+  log("server", `Claude skip permissions: ${CLAUDE_SKIP_PERMISSIONS ? "ENABLED" : "DISABLED"}`);
   if (WEBHOOK_SECRET) {
     log("server", "Secret validation: ENABLED");
   } else {

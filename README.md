@@ -1,72 +1,219 @@
-# SauceDemo (Swag Labs) — QA Test Suite
+# SauceDemo Jira-Driven Manual E2E QA Agent
 
-QA test context, flow documentation, and agent rules for the **SauceDemo** demo e-commerce application.
+This repository demonstrates an agent-assisted manual QA workflow for the SauceDemo e-commerce demo application. It is designed as a portfolio project showing how a QA agent can react to a Jira ticket moving into testing, generate structured test cases, execute browser-based end-to-end checks, collect video evidence, and report the result back to Jira.
 
-> **Site URL:** https://www.saucedemo.com/  
-> **Purpose:** Demo e-commerce app by Sauce Labs for practicing test automation.
+> Target application: https://www.saucedemo.com/
 
----
+## Problem Being Solved
+
+Manual regression testing often breaks down because test cases, execution evidence, and Jira updates are handled in separate places. This project keeps that workflow explicit and repeatable:
+
+1. A Jira issue is moved to `Ready for Testing`.
+2. A local webhook receives the Jira event.
+3. The QA agent reads product context and flow documentation.
+4. The agent generates Excel test cases for the ticket.
+5. The agent executes the relevant SauceDemo flows in a browser.
+6. Each test case is recorded as evidence.
+7. Test results and evidence links are posted back to Jira.
+
+## Tech Stack
+
+| Area | Tooling |
+|---|---|
+| Runtime | Node.js |
+| Webhook | Native Node HTTP server |
+| Agent runtime | Claude CLI workflow instructions |
+| Browser execution | `agent-browser` |
+| Test case output | ExcelJS |
+| Agent tool integration | Model Context Protocol (MCP) |
+| Work management | Jira webhook + Jira API attachment upload |
+
+## Architecture
+
+```text
+Jira status transition
+        |
+        v
+POST /webhook
+        |
+        v
+Webhook validates secret, issue key, and target status
+        |
+        v
+QA agent receives Jira ticket URL
+        |
+        v
+Reads rules/ and test-context/
+        |
+        v
+Generates Excel test cases with MCP
+        |
+        v
+Runs SauceDemo manual E2E browser checks
+        |
+        v
+Saves .webm evidence per test case
+        |
+        v
+Uploads evidence and posts Jira result comment
+```
 
 ## Repository Structure
 
-```
+```text
 .
-├── AGENTS.md                          # AI agent instructions and runtime policy
+├── AGENTS.md                     # QA agent runtime policy
+├── CLAUDE.md                     # Full execution workflow for Claude CLI
+├── index.js                      # Jira webhook receiver
+├── mcp-server.mjs                # MCP tool for Excel test case generation
+├── package.json
 ├── rules/
-│   ├── saucedemo-context.mdc          # Platform overview, credentials, known issues (quick ref)
-│   ├── test-case-generation.mdc       # Workflow and format for generating test cases
-│   └── browser-automation.md         # Browser session, recording, and startup rules
-├── test-context/
-│   ├── environment.md                 # Environments, credentials, URLs, product list
-│   ├── known-issues.md                # Known bugs, limitations, and observations
-│   └── flows/                         # Step-by-step flow documentation (01–11)
-│       ├── 01-login.md
-│       ├── 02-product-listing.md
-│       ├── 03-product-detail.md
-│       ├── 04-shopping-cart.md
-│       ├── 05-checkout-flow.md
-│       ├── 06-navigation-menu.md
-│       ├── 07-user-accounts.md
-│       ├── 08-products-catalog.md
-│       ├── 09-sorting-filtering.md
-│       ├── 10-feature-summary.md
-│       └── 11-order-flow.md
-├── tc_template/                       # Generated Excel test case files per feature/ticket
-└── Testing Result/                    # Test recordings (.webm), one folder per test case
+│   ├── browser-automation.md     # Browser session and recording rules
+│   ├── jira-reporting.md         # Evidence upload and Jira comment rules
+│   ├── saucedemo-context.md      # Quick product and environment context
+│   └── test-case-generation.md   # Test case generation standard
+├── samples/
+│   └── jira-ready-for-testing-webhook.json
+└── test-context/
+    ├── environment.md
+    ├── known-issues.md
+    └── flows/                    # SauceDemo flow documentation
 ```
 
----
+Generated artifacts are intentionally ignored by Git:
 
-## Quick Reference
+```text
+tc_template/       # Generated Excel test case files
+Testing Result/    # Video recordings per test case
+```
 
-| Item | Value |
-|---|---|
-| Site URL | `https://www.saucedemo.com/` |
-| Standard user | `standard_user` / `secret_sauce` |
-| Locked user | `locked_out_user` / `secret_sauce` |
-| Products | 6 items ($7.99 – $49.99) |
-| Checkout mock card | `SauceCard #31337` |
+## Jira Workflow
 
----
+The webhook is intended to run when a Jira issue transitions into the configured target status.
 
-## Flow Files
+Default target status:
 
-| # | File | Description |
-|---|---|---|
-| 01 | [Login](./test-context/flows/01-login.md) | Login UI, credentials, error messages |
-| 02 | [Product Listing](./test-context/flows/02-product-listing.md) | Products grid, card elements, sort |
-| 03 | [Product Detail](./test-context/flows/03-product-detail.md) | Individual product view |
-| 04 | [Shopping Cart](./test-context/flows/04-shopping-cart.md) | Cart management |
-| 05 | [Checkout Flow](./test-context/flows/05-checkout-flow.md) | 3-step checkout: info → overview → confirmation |
-| 06 | [Navigation Menu](./test-context/flows/06-navigation-menu.md) | Hamburger sidebar menu |
-| 07 | [User Accounts](./test-context/flows/07-user-accounts.md) | All 6 test users and behaviors |
-| 08 | [Products Catalog](./test-context/flows/08-products-catalog.md) | All 6 products with prices |
-| 09 | [Sorting & Filtering](./test-context/flows/09-sorting-filtering.md) | Sort options |
-| 10 | [Feature Summary](./test-context/flows/10-feature-summary.md) | Full feature list at a glance |
-| 11 | [Order Flow](./test-context/flows/11-order-flow.md) | Complete step-by-step order journey |
+```text
+Ready for Testing
+```
 
----
+The target status can be changed with:
 
-## Getting Started
+```bash
+TARGET_JIRA_STATUS="Ready for Testing"
+```
 
-Read `AGENTS.md` first — it contains the full runtime policy and rules for test execution.
+Webhook behavior:
+
+- Rejects invalid JSON payloads.
+- Optionally validates `x-webhook-secret`.
+- Requires `JIRA_BASE_URL`.
+- Ignores Jira events that are not in the target status.
+- Starts the QA agent only when the issue is ready for testing.
+
+## Setup
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Create local environment config:
+
+```bash
+cp .env.example .env
+```
+
+Fill in:
+
+```text
+JIRA_BASE_URL
+JIRA_EMAIL
+JIRA_API_TOKEN
+WEBHOOK_SECRET
+TARGET_JIRA_STATUS
+CLAUDE_SKIP_PERMISSIONS
+```
+
+Install browser execution tooling:
+
+```bash
+npm install -g agent-browser
+agent-browser install
+```
+
+## Running Locally
+
+Start the Jira webhook receiver:
+
+```bash
+npm start
+```
+
+Webhook endpoint:
+
+```text
+POST http://127.0.0.1:3000/webhook
+```
+
+Example local request:
+
+```bash
+curl -X POST "http://127.0.0.1:3000/webhook" \
+  -H "Content-Type: application/json" \
+  -H "x-webhook-secret: change-me" \
+  --data @samples/jira-ready-for-testing-webhook.json
+```
+
+Start the MCP test case generator when configuring the agent runtime:
+
+```bash
+npm run start:mcp
+```
+
+## Test Execution Standard
+
+The agent must follow this order for each Jira ticket:
+
+1. Read `rules/saucedemo-context.md`, `rules/browser-automation.md`, `rules/test-case-generation.md`, `rules/jira-reporting.md`, and relevant files under `test-context/flows/`.
+2. Generate Excel test cases in `tc_template/{TICKET_ID}_Test_Cases.xlsx`.
+3. Execute each test case in a fresh browser session.
+4. Record one `.webm` file per test case under `Testing Result/`.
+5. Update the Excel file with `Passed`, `Failed`, or `Untested`.
+6. Upload recordings to Jira.
+7. Post one Jira comment with the result table and evidence links.
+
+## SauceDemo Coverage
+
+Documented flows include:
+
+- Login and negative login states
+- Product listing
+- Product detail
+- Cart management
+- Checkout information validation
+- Checkout overview and order confirmation
+- Navigation menu
+- User-specific behaviors
+- Sorting and filtering
+- End-to-end order flow
+
+## Known Limitations
+
+SauceDemo is a demo application:
+
+- There is only one public environment.
+- Orders are simulated.
+- Payment and shipping values are hardcoded.
+- Cart state is session-based.
+- Some users intentionally expose bugs for QA practice.
+
+See `test-context/known-issues.md` for detailed notes.
+
+## Security Notes
+
+- Do not commit `.env`.
+- Do not commit real Jira API tokens.
+- `Testing Result/` may contain video evidence and should be reviewed before sharing.
+- Keep `CLAUDE_SKIP_PERMISSIONS=false` unless running in a trusted local sandbox.
